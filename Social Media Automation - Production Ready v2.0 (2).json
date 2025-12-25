@@ -1,0 +1,1121 @@
+{
+  "name": "Social Media Automation - Production Ready v2.0",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "19a998a7-53ca-4473-9631-5650730831a0",
+      "name": "Warm-Up Schedule (Every 6h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1904,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 2141242965,
+          "mode": "list",
+          "cachedResultName": "Accounts",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o/edit#gid=2141242965"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "Warming"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9f2b02b7-3b8f-4c46-a02e-ed21c12b25db",
+      "name": "Fetch Warming Accounts",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -1680,
+        -32
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// SAFETY FILTER - Prevent over-warming\nconst items = $input.all();\nconst now = new Date();\nconst safeAccounts = [];\n\nfor (const item of items) {\n  const acc = item.json;\n  const lastWarmed = acc.Last_Warmed ? new Date(acc.Last_Warmed) : null;\n  const todayCount = parseInt(acc.Today_Warm_Count) || 0;\n  const banRisk = parseFloat(acc.Ban_Risk_Score) || 0;\n  \n  // Rule 1: Min 4h gap\n  if (lastWarmed) {\n    const hoursGap = (now - lastWarmed) / 3600000;\n    if (hoursGap < 4) {\n      console.log(`Skip ${acc.Account_Name}: ${hoursGap.toFixed(1)}h since last warm`);\n      continue;\n    }\n  }\n  \n  // Rule 2: Ban risk check\n  if (banRisk > 3) {\n    console.log(`Skip ${acc.Account_Name}: High risk ${banRisk}`);\n    continue;\n  }\n  \n  // Rule 3: Daily limit (progressive by age)\n  const ageHours = acc.Created_Date ? (now - new Date(acc.Created_Date)) / 3600000 : 999;\n  const maxDaily = ageHours < 72 ? 2 : (ageHours < 168 ? 3 : 4);\n  if (todayCount >= maxDaily) {\n    console.log(`Skip ${acc.Account_Name}: ${todayCount}/${maxDaily} today`);\n    continue;\n  }\n  \n  safeAccounts.push(item);\n}\n\nconsole.log(`Safe accounts: ${safeAccounts.length}/${items.length}`);\nreturn safeAccounts;"
+      },
+      "id": "a93652ba-c865-4c47-9426-a80814d51202",
+      "name": "Safety Filter Warming",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1456,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://panel.iproyal.com/api/residential-subusers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"username\": \"{{ $json.Account_Name }}\", \"password\": \"{{ $json.Account_Name }}_proxy\", \"traffic_limit\": 10, \"country\": \"{{ $json.Target_Country || 'US' }}\"}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "dcd98502-d9e3-44e4-ae05-259ae909b696",
+      "name": "Get IPRoyal Proxy",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1232,
+        -32
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ySwwaMKuPC6EWgpS",
+          "name": "Header Auth account 2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// PROXY + DEVICE CONFIG\nconst acc = $input.item.json;\nconst proxy = $('Get IPRoyal Proxy').item.json;\n\n// Device pool (weighted)\nconst devices = [\n  {name: 'iPhone 15 Pro', os: 'ios', v: '17.5', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', w: 30},\n  {name: 'iPhone 14', os: 'ios', v: '17.4', ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1', w: 20},\n  {name: 'Samsung S24', os: 'android', v: '14', ua: 'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', w: 25},\n  {name: 'Google Pixel 8', os: 'android', v: '14', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', w: 15},\n  {name: 'OnePlus 12', os: 'android', v: '14', ua: 'Mozilla/5.0 (Linux; Android 14; CPH2581) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36', w: 10}\n];\n\n// Weighted selection\nlet totalW = devices.reduce((s,d) => s+d.w, 0);\nlet rand = Math.random() * totalW;\nlet dev = devices[0];\nfor (const d of devices) {\n  if (rand < d.w) { dev = d; break; }\n  rand -= d.w;\n}\n\n// Proxy setup\nconst proxyHost = 'geo.iproyal.com';\nconst proxyPort = 12321;\nconst proxyUser = proxy.username || acc.Account_Name;\nconst proxyPass = proxy.password || `${acc.Account_Name}_proxy`;\n\nreturn {json: {\n  ...acc,\n  proxy_host: proxyHost,\n  proxy_port: proxyPort,\n  proxy_user: proxyUser,\n  proxy_pass: proxyPass,\n  proxy_full: `${proxyUser}:${proxyPass}@${proxyHost}:${proxyPort}`,\n  device_name: dev.name,\n  device_os: dev.os,\n  device_version: dev.v,\n  user_agent: dev.ua,\n  screen_width: dev.os === 'ios' ? 390 : 360,\n  screen_height: dev.os === 'ios' ? 844 : 800,\n  fingerprint_id: `${dev.os}-${Date.now()}-${Math.random().toString(36).substr(2,9)}`\n}};"
+      },
+      "id": "7de8c28c-670e-43c0-b77d-5306b0dbab28",
+      "name": "Prepare Device Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1024,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.GoLogin_Profile_ID }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c726a23a-6bb6-477d-8c8a-1db1a29176e5",
+      "name": "Has Profile?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -800,
+        -32
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gologin.com/browser",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\"name\": \"{{ $json.Account_Name }}\", \"os\": \"{{ $json.device_os }}\", \"navigator\": {\"userAgent\": \"{{ $json.user_agent }}\", \"resolution\": \"{{ $json.screen_width }}x{{ $json.screen_height }}\", \"language\": \"en-US,en;q=0.9\", \"platform\": \"{{ $json.device_os === 'ios' ? 'iPhone' : 'Linux armv81' }}\", \"hardwareConcurrency\": {{ $json.device_os === 'ios' ? 6 : 8 }}, \"deviceMemory\": {{ $json.device_os === 'ios' ? 6 : 8 }}}, \"proxyEnabled\": true, \"proxy\": {\"mode\": \"http\", \"host\": \"{{ $json.proxy_host }}\", \"port\": {{ $json.proxy_port }}, \"username\": \"{{ $json.proxy_user }}\", \"password\": \"{{ $json.proxy_pass }}\"}, \"timezone\": {\"enabled\": true, \"fillBasedOnIp\": true}, \"geolocation\": {\"mode\": \"prompt\", \"enabled\": true, \"fillBasedOnIp\": true}, \"webRTC\": {\"mode\": \"alerted\", \"enabled\": true, \"fillBasedOnIp\": true}, \"canvas\": {\"mode\": \"noise\"}, \"webGL\": {\"mode\": \"noise\"}, \"webGLMetadata\": {\"mode\": \"mask\", \"vendor\": \"{{ $json.device_os === 'ios' ? 'Apple Inc.' : 'Qualcomm' }}\", \"renderer\": \"{{ $json.device_os === 'ios' ? 'Apple GPU' : 'Adreno 730' }}\"}, \"clientRects\": {\"mode\": \"noise\"}, \"audioContext\": {\"mode\": \"noise\"}, \"mediaDevices\": {\"videoInputs\": 1, \"audioInputs\": 1, \"audioOutputs\": 1, \"enableMasking\": true}, \"fonts\": {\"families\": {{ $json.device_os === 'ios' ? '[\"SF Pro Display\"]' : '[\"Roboto\"]' }}}}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "ab8677a7-a0c5-4001-b9e3-58d0124f8886",
+      "name": "Create GoLogin Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -576,
+        -128
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ySwwaMKuPC6EWgpS",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Accounts"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "475dfbb0-c625-41cf-8be9-48f52e3692c9",
+      "name": "Save Profile to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -352,
+        -128
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "90601501-5f64-4356-9d48-1689e2cbafd9",
+      "name": "Set Profile ID",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -144,
+        -128
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "2a69a30e-420a-44b5-9b6d-4662b12ba9ba",
+      "name": "Merge Profiles",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        -144,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gologin.com/browser/{{ $json.GoLogin_Profile_ID }}/web",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "1e59e3aa-8437-4037-a5ca-845b8aef2011",
+      "name": "Start Browser",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        96,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ySwwaMKuPC6EWgpS",
+          "name": "Header Auth account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * 16) + 15 }}"
+      },
+      "id": "b8715579-004f-4eeb-9f0c-a0da9f077ca6",
+      "name": "Wait Browser Ready",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        304,
+        80
+      ],
+      "webhookId": "browser-ready"
+    },
+    {
+      "parameters": {
+        "jsCode": "// REALISTIC WARM-UP SCRIPT GENERATOR\nconst acc = $input.item.json;\nconst wsUrl = $('Start Browser').item.json.wsUrl;\nconst platform = (acc.Platform || 'instagram').toLowerCase();\n\nconst sessionMin = Math.floor(Math.random() * 300) + 180; // 3-8min\nconst totalActions = Math.floor(Math.random() * 25) + 15; // 15-40\n\n// Action weights\nconst acts = [\n  {a: 'scroll_down', w: 35}, {a: 'pause', w: 25}, {a: 'scroll_up', w: 10},\n  {a: 'tap_like', w: 5}, {a: 'watch_video', w: 10}, {a: 'tap_story', w: 8}, {a: 'view_profile', w: 7}\n];\n\nfunction genSeq() {\n  const seq = [];\n  const totalW = acts.reduce((s,x) => s+x.w, 0);\n  for (let i = 0; i < totalActions; i++) {\n    let r = Math.random() * totalW, sel = acts[0];\n    for (const x of acts) { if (r < x.w) { sel = x; break; } r -= x.w; }\n    seq.push({action: sel.a, pause: Math.floor(Math.random() * 6000) + 2000});\n  }\n  return seq;\n}\n\nconst seq = genSeq();\nconst urls = {instagram: 'https://www.instagram.com/', tiktok: 'https://www.tiktok.com/foryou'};\n\nconst script = `\nconst puppeteer = require('puppeteer-core');\n(async () => {\n  try {\n    const browser = await puppeteer.connect({browserWSEndpoint: '${wsUrl}'});\n    const pages = await browser.pages();\n    const page = pages[0] || await browser.newPage();\n    \n    await page.setViewport({width: ${acc.screen_width}, height: ${acc.screen_height}, deviceScaleFactor: 3, isMobile: true, hasTouch: true});\n    await page.goto('${urls[platform]}', {waitUntil: 'networkidle2', timeout: 60000});\n    await page.waitForTimeout(${Math.floor(Math.random() * 3000) + 2000});\n    \n    const actions = ${JSON.stringify(seq)};\n    for (const act of actions) {\n      try {\n        switch(act.action) {\n          case 'scroll_down':\n            await page.evaluate(() => window.scrollBy({top: Math.random()*400+200, behavior: 'smooth'}));\n            break;\n          case 'scroll_up':\n            await page.evaluate(() => window.scrollBy({top: -(Math.random()*150+50), behavior: 'smooth'}));\n            break;\n          case 'tap_like':\n            const like = await page.$('article button[aria-label*=\"Like\"]');\n            if (like) {\n              const box = await like.boundingBox();\n              if (box) await page.touchscreen.tap(box.x + box.width*0.5, box.y + box.height*0.5);\n            }\n            break;\n          case 'watch_video':\n            await page.waitForTimeout(Math.floor(Math.random()*20000)+5000);\n            break;\n        }\n        await page.waitForTimeout(act.pause);\n      } catch (e) {}\n    }\n    \n    await page.waitForTimeout(3000);\n    await browser.disconnect();\n    return {success: true, actions: actions.length};\n  } catch (err) {\n    throw err;\n  }\n})();\n`;\n\nreturn {json: {\n  Account_Name: acc.Account_Name,\n  profileId: acc.GoLogin_Profile_ID,\n  platform: platform,\n  puppeteerScript: script,\n  actionCount: totalActions,\n  sessionDuration: sessionMin\n}};"
+      },
+      "id": "041c154a-1915-46cf-8c6e-aaf6a813b756",
+      "name": "Generate Warmup Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd /tmp && cat > warmup_{{ $json.profileId }}.js << 'EOF'\n{{ $json.puppeteerScript }}\nEOF\nnpm install puppeteer-core --no-save 2>&1 >/dev/null\nnode warmup_{{ $json.profileId }}.js\nrm -f warmup_{{ $json.profileId }}.js"
+      },
+      "id": "13f4ffa7-e01e-4dda-b8b2-956e594a8279",
+      "name": "Execute Warmup",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        752,
+        80
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ANALYZE RESULTS\nconst data = $input.item.json;\nconst exec = $('Execute Warmup').item.json;\nconst out = exec.stdout || '';\nconst err = exec.stderr || '';\n\nlet success = out.includes('\"success\":true') || out.includes('success: true');\nlet banDetected = false;\nlet errMsg = null;\nlet riskDelta = 0;\n\n// Ban keywords\nconst banWords = ['Action Blocked', 'temporarily blocked', 'unusual activity', 'account has been disabled'];\nfor (const w of banWords) {\n  if ((out+err).toLowerCase().includes(w.toLowerCase())) {\n    banDetected = true;\n    errMsg = `Ban detected: ${w}`;\n    riskDelta = 5;\n    break;\n  }\n}\n\nif (!banDetected) {\n  if (success) {\n    riskDelta = -0.5;\n  } else if (err.includes('429')) {\n    riskDelta = 2; errMsg = 'Rate limit 429';\n  } else if (err.includes('403')) {\n    riskDelta = 3; errMsg = 'Forbidden 403';\n  } else if (!success) {\n    riskDelta = 1; errMsg = err.substring(0, 500) || 'Unknown error';\n  }\n}\n\nreturn {json: {\n  Account_Name: data.Account_Name,\n  profileId: data.profileId,\n  success: success,\n  banDetected: banDetected,\n  banRiskDelta: riskDelta,\n  errorMsg: errMsg,\n  timestamp: new Date().toISOString()\n}};"
+      },
+      "id": "6e8b96a3-1bc5-431a-b382-48f2eb6c06b0",
+      "name": "Analyze Warmup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        976,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "https://api.gologin.com/browser/{{ $json.profileId }}/web",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "34e80fa7-7354-49ed-8f76-c5296608ab1c",
+      "name": "Stop Browser",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1184,
+        80
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "ySwwaMKuPC6EWgpS",
+          "name": "Header Auth account 2"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Accounts"
+        },
+        "options": {}
+      },
+      "id": "d956e2f2-1b29-4b43-851f-845023a86365",
+      "name": "Update Sheet Warmup",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        1408,
+        80
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * 121) + 60 }}"
+      },
+      "id": "ef5a9172-cdd1-48f2-b2c2-a6b8632bf949",
+      "name": "Cooldown 1-3min",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1632,
+        80
+      ],
+      "webhookId": "warmup-cooldown"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "post-content",
+        "options": {
+          "responseData": "allEntries"
+        }
+      },
+      "id": "a7a19820-3d20-457b-87a3-3d3afd592416",
+      "name": "Posting Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1904,
+        576
+      ],
+      "webhookId": "post-content"
+    },
+    {
+      "parameters": {
+        "jsCode": "// VALIDATE WEBHOOK\nconst body = $input.item.json.body;\nif (!body.video_url || !body.caption) throw new Error('Missing video_url or caption');\nif (!body.video_url.startsWith('http')) throw new Error('Invalid video_url');\n\nconst platform = (body.platform || 'instagram').toLowerCase();\nconst maxLen = {instagram: 2200, tiktok: 2200};\nif (body.caption.length > maxLen[platform]) throw new Error(`Caption too long: ${body.caption.length}/${maxLen[platform]}`);\n\nreturn {json: {video_url: body.video_url, caption: body.caption, platform: platform, account_limit: parseInt(body.account_limit) || 20}};"
+      },
+      "id": "a9b9b0d0-535d-414c-908a-44cbba00f680",
+      "name": "Validate Post Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1680,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Accounts"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "Ready"
+            },
+            {
+              "lookupColumn": "Ban_Risk_Score",
+              "lookupValue": "<=2"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bd934a7e-ba1f-4c4b-b0a4-7ce3b44d4afa",
+      "name": "Fetch Ready Accounts",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -1456,
+        576
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// SAFETY FILTER - Posting\nconst items = $input.all();\nconst postData = $('Validate Post Data').item.json;\nconst now = new Date();\nconst safe = [];\n\nfor (const item of items) {\n  const acc = item.json;\n  const lastPost = acc.Last_Posted ? new Date(acc.Last_Posted) : null;\n  const todayCount = parseInt(acc.Today_Post_Count) || 0;\n  const risk = parseFloat(acc.Ban_Risk_Score) || 0;\n  \n  // Rule 1: Min 6h gap\n  if (lastPost && (now - lastPost) / 3600000 < 6) continue;\n  \n  // Rule 2: Ban risk <=2\n  if (risk > 2) continue;\n  \n  // Rule 3: Daily limits (progressive)\n  const ageDays = acc.Ready_Date ? (now - new Date(acc.Ready_Date)) / 86400000 : 999;\n  const maxDaily = ageDays < 30 ? 1 : (ageDays < 60 ? 3 : (ageDays < 90 ? 5 : 7));\n  if (todayCount >= maxDaily) continue;\n  \n  // Rule 4: Platform match\n  if ((acc.Platform || 'instagram').toLowerCase() !== postData.platform) continue;\n  \n  safe.push({json: {...acc, posting_video: postData.video_url, posting_caption: postData.caption, posting_platform: postData.platform}});\n}\n\nif (safe.length === 0) throw new Error('No safe accounts available');\nreturn safe;"
+      },
+      "id": "57cf080a-16a2-4e54-a8cb-ebaa33d4f4b2",
+      "name": "Safety Filter Posting",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1232,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 3,
+        "options": {}
+      },
+      "id": "e09966bd-eb8d-43e2-b808-8436366c9546",
+      "name": "Batch 3",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1024,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.gologin.com/browser/{{ $json.GoLogin_Profile_ID }}/web",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GOLOGIN_TOKEN"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "60d4a138-5e8c-4484-81d3-e031d7ae674e",
+      "name": "Start Browser Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -800,
+        576
+      ],
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * 11) + 10 }}"
+      },
+      "id": "d2b9d1de-c41c-4d94-b4c3-b2c69c7a4084",
+      "name": "Wait Post",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -576,
+        576
+      ],
+      "webhookId": "post-ready"
+    },
+    {
+      "parameters": {
+        "jsCode": "// BROWSER POSTING SCRIPT\nconst acc = $input.item.json;\nconst wsUrl = $('Start Browser Post').item.json.wsUrl;\nconst videoUrl = acc.posting_video;\nconst caption = acc.posting_caption;\nconst platform = acc.posting_platform;\nconst videoFile = `video_${Date.now()}.mp4`;\n\nconst sels = {\n  instagram: {create: 'svg[aria-label=\"New post\"]', upload: 'input[type=\"file\"][accept*=\"video\"]', next: 'button:has-text(\"Next\")', caption: 'textarea[aria-label=\"Write a caption\"]', share: 'button:has-text(\"Share\")', success: 'svg[aria-label=\"Your post has been shared\"]'},\n  tiktok: {upload: 'input[type=\"file\"][accept*=\"video\"]', caption: 'div[contenteditable=\"true\"]', post: 'button:has-text(\"Post\")', success: 'div:has-text(\"posted successfully\")'}\n};\nconst sel = sels[platform] || sels.instagram;\n\nconst script = `\nconst puppeteer = require('puppeteer-core');\nconst fs = require('fs');\nconst https = require('https');\nconst path = require('path');\n\n(async () => {\n  let browser;\n  try {\n    const videoPath = '/tmp/${videoFile}';\n    console.log('Downloading video...');\n    await new Promise((res, rej) => {\n      const file = fs.createWriteStream(videoPath);\n      https.get('${videoUrl}', (resp) => {\n        if (resp.statusCode !== 200) { rej(new Error('Download failed: ' + resp.statusCode)); return; }\n        resp.pipe(file);\n        file.on('finish', () => { file.close(); res(); });\n      }).on('error', rej);\n    });\n    \n    browser = await puppeteer.connect({browserWSEndpoint: '${wsUrl}'});\n    const pages = await browser.pages();\n    const page = pages[0] || await browser.newPage();\n    \n    await page.setViewport({width: ${acc.screen_width || 390}, height: ${acc.screen_height || 844}, deviceScaleFactor: 3, isMobile: true, hasTouch: true});\n    \n    const urls = {instagram: 'https://www.instagram.com/', tiktok: 'https://www.tiktok.com/upload'};\n    await page.goto(urls['${platform}'], {waitUntil: 'networkidle2', timeout: 60000});\n    await page.waitForTimeout(3000);\n    \n    if ('${platform}' === 'instagram') {\n      await page.click('${sel.create}');\n      await page.waitForTimeout(2000);\n      const inp = await page.waitForSelector('${sel.upload}', {timeout: 20000});\n      await inp.uploadFile(videoPath);\n      await page.waitForTimeout(8000);\n      \n      for (let i = 0; i < 3; i++) {\n        try { await page.click('${sel.next}'); await page.waitForTimeout(2000); } catch(e) { break; }\n      }\n      \n      const cap = await page.waitForSelector('${sel.caption}', {timeout: 10000});\n      await cap.click();\n      await page.waitForTimeout(500);\n      await cap.type(\\`${caption.replace(/`/g, '\\\\`')}\\`, {delay: Math.random()*50+30});\n      await page.waitForTimeout(2000);\n      await page.click('${sel.share}');\n      await page.waitForSelector('${sel.success}', {timeout: 60000});\n    } else {\n      const inp = await page.waitForSelector('${sel.upload}', {timeout: 30000});\n      await inp.uploadFile(videoPath);\n      await page.waitForTimeout(15000);\n      const cap = await page.waitForSelector('${sel.caption}', {timeout: 20000});\n      await cap.type(\\`${caption.replace(/`/g, '\\\\`')}\\`, {delay: Math.random()*50+30});\n      await page.waitForTimeout(2000);\n      await page.click('${sel.post}');\n      await page.waitForSelector('${sel.success}', {timeout: 90000});\n    }\n    \n    fs.unlinkSync(videoPath);\n    await browser.disconnect();\n    return {success: true, platform: '${platform}'};\n  } catch (err) {\n    if (browser) await browser.disconnect();\n    try { fs.unlinkSync('/tmp/${videoFile}'); } catch(e) {}\n    throw err;\n  }\n})();\n`;\n\nreturn {json: {Account_Name: acc.Account_Name, profileId: acc.GoLogin_Profile_ID, puppeteerScript: script}};"
+      },
+      "id": "0df5f783-ec20-4e18-8f1d-d9c5addb42d5",
+      "name": "Generate Post Script",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -352,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "command": "=cd /tmp && cat > post_{{ $json.profileId }}.js << 'EOF'\n{{ $json.puppeteerScript }}\nEOF\nnpm install puppeteer-core --no-save 2>&1 >/dev/null\nnode post_{{ $json.profileId }}.js 2>&1\nrm -f post_{{ $json.profileId }}.js"
+      },
+      "id": "05031628-2ff0-4ec8-ba3e-655b66c8dd94",
+      "name": "Execute Post",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        576
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// ANALYZE POST RESULTS\nconst data = $input.item.json;\nconst exec = $('Execute Post').item.json;\nconst out = exec.stdout || '';\nconst err = exec.stderr || '';\n\nlet success = out.includes('\"success\":true') || out.includes('Post successful');\nlet banDetected = false;\nlet errMsg = null;\nlet riskDelta = 0;\n\nconst banWords = ['Action Blocked', 'temporarily blocked', 'unusual activity', 'account has been disabled'];\nfor (const w of banWords) {\n  if ((out+err).toLowerCase().includes(w.toLowerCase())) {\n    banDetected = true; errMsg = `Ban: ${w}`; riskDelta = 5; break;\n  }\n}\n\nif (!banDetected) {\n  if (success) { riskDelta = -0.3; }\n  else if (err.includes('429')) { riskDelta = 3; errMsg = 'Rate limit'; }\n  else if (err.includes('403')) { riskDelta = 3; errMsg = 'Forbidden'; }\n  else { riskDelta = 1.5; errMsg = err.substring(0, 500) || 'Unknown'; }\n}\n\nreturn {json: {Account_Name: data.Account_Name, profileId: data.profileId, success: success, banDetected: banDetected, banRiskDelta: riskDelta, errorMsg: errMsg, timestamp: new Date().toISOString()}};"
+      },
+      "id": "18858826-a257-46b3-a521-5e2f74f5c9c8",
+      "name": "Analyze Post",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        576
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "https://api.gologin.com/browser/{{ $json.profileId }}/web",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_GOLOGIN_TOKEN"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "ef13c08a-015d-446e-bacd-370313175995",
+      "name": "Stop Browser Post",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        304,
+        576
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Accounts"
+        },
+        "options": {}
+      },
+      "id": "57a89db2-9df9-493b-9ad7-85645ff08901",
+      "name": "Update Sheet Post",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        528,
+        576
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * 241) + 120 }}"
+      },
+      "id": "0161d286-7ad4-47b6-81a5-788502b10daf",
+      "name": "Cooldown 2-6min",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        752,
+        576
+      ],
+      "webhookId": "post-cooldown"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 2 * * *"
+            }
+          ]
+        }
+      },
+      "id": "3869b345-8f01-420a-a417-abca69a9462c",
+      "name": "Daily Reset 2AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1904,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Accounts"
+        },
+        "options": {}
+      },
+      "id": "67b9c515-2061-46a4-bbe9-8763037d435c",
+      "name": "Fetch All",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -1680,
+        1184
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// DAILY HEALTH CHECK\nconst items = $input.all();\nconst now = new Date();\nconst updates = [];\n\nfor (const item of items) {\n  const acc = item.json;\n  const update = {Account_Name: acc.Account_Name, Today_Warm_Count: 0, Today_Post_Count: 0};\n  \n  // Auto-transition Warming->Ready\n  if (acc.Status === 'Warming' && parseInt(acc.Warm_Count||0) >= 15 && parseFloat(acc.Ban_Risk_Score||0) <= 3) {\n    update.Status = 'Ready'; update.Ready_Date = now.toISOString();\n  }\n  \n  // Flag inactive\n  if (acc.Status === 'Ready' && acc.Last_Posted) {\n    const days = (now - new Date(acc.Last_Posted)) / 86400000;\n    if (days > 7) { update.Status = 'Inactive'; update.Inactive_Reason = `No posts ${Math.floor(days)}d`; }\n  }\n  \n  // Ban risk decay\n  if (parseFloat(acc.Ban_Risk_Score||0) > 0 && acc.Status !== 'Banned') {\n    update.Ban_Risk_Score = Math.max(0, parseFloat(acc.Ban_Risk_Score) - 0.1);\n  }\n  \n  updates.push({json: update});\n}\nreturn updates;"
+      },
+      "id": "f9b533e5-28b4-4b72-aaa2-a261cdecd4c8",
+      "name": "Health Check",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1456,
+        1184
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1qBgzIGTUNsvra1iOSXBke1GqAaydQKdVKKWwyJ-X35o"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Accounts"
+        },
+        "options": {}
+      },
+      "id": "35800c7a-b08d-4e88-a2e5-67432ecead75",
+      "name": "Batch Update",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -1232,
+        1184
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ps2KVQ6Xq6QrrgSx",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Warm-Up Schedule (Every 6h)": {
+      "main": [
+        [
+          {
+            "node": "Fetch Warming Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Warming Accounts": {
+      "main": [
+        [
+          {
+            "node": "Safety Filter Warming",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety Filter Warming": {
+      "main": [
+        [
+          {
+            "node": "Get IPRoyal Proxy",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get IPRoyal Proxy": {
+      "main": [
+        [
+          {
+            "node": "Prepare Device Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Device Config": {
+      "main": [
+        [
+          {
+            "node": "Has Profile?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Profile?": {
+      "main": [
+        [
+          {
+            "node": "Merge Profiles",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "Create GoLogin Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create GoLogin Profile": {
+      "main": [
+        [
+          {
+            "node": "Save Profile to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Profile to Sheet": {
+      "main": [
+        [
+          {
+            "node": "Set Profile ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Profile ID": {
+      "main": [
+        [
+          {
+            "node": "Merge Profiles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Profiles": {
+      "main": [
+        [
+          {
+            "node": "Start Browser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Browser": {
+      "main": [
+        [
+          {
+            "node": "Wait Browser Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Browser Ready": {
+      "main": [
+        [
+          {
+            "node": "Generate Warmup Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Warmup Script": {
+      "main": [
+        [
+          {
+            "node": "Execute Warmup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Warmup": {
+      "main": [
+        [
+          {
+            "node": "Analyze Warmup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Warmup": {
+      "main": [
+        [
+          {
+            "node": "Stop Browser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop Browser": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Warmup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet Warmup": {
+      "main": [
+        [
+          {
+            "node": "Cooldown 1-3min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Posting Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate Post Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Post Data": {
+      "main": [
+        [
+          {
+            "node": "Fetch Ready Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Ready Accounts": {
+      "main": [
+        [
+          {
+            "node": "Safety Filter Posting",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Safety Filter Posting": {
+      "main": [
+        [
+          {
+            "node": "Batch 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Batch 3": {
+      "main": [
+        [
+          {
+            "node": "Start Browser Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start Browser Post": {
+      "main": [
+        [
+          {
+            "node": "Wait Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait Post": {
+      "main": [
+        [
+          {
+            "node": "Generate Post Script",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Post Script": {
+      "main": [
+        [
+          {
+            "node": "Execute Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute Post": {
+      "main": [
+        [
+          {
+            "node": "Analyze Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Post": {
+      "main": [
+        [
+          {
+            "node": "Stop Browser Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Stop Browser Post": {
+      "main": [
+        [
+          {
+            "node": "Update Sheet Post",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Sheet Post": {
+      "main": [
+        [
+          {
+            "node": "Cooldown 2-6min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daily Reset 2AM": {
+      "main": [
+        [
+          {
+            "node": "Fetch All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch All": {
+      "main": [
+        [
+          {
+            "node": "Health Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Health Check": {
+      "main": [
+        [
+          {
+            "node": "Batch Update",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "0830e0df-977b-4551-a3eb-b94537692d51",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "4289a0e0729825fdda3c592b56f30c87d109e0989ead5204ffad54b9618f5271"
+  },
+  "id": "Ae0K7cZBHbH7afMI",
+  "tags": []
+}
